@@ -4,10 +4,11 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
-	"github.com/coreos/go-oidc/v3/oidc"
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/coreos/go-oidc/v3/oidc"
 )
 
 type tokenKey struct{}
@@ -27,6 +28,7 @@ func Token(req *http.Request) *oidc.IDToken {
 
 // User based on (in order of priority) claims: preferred_username, email, subject.
 func User(token *oidc.IDToken) string {
+	//nolint:tagliatelle
 	var claims struct {
 		Username string `json:"preferred_username"`
 		Email    string `json:"email"`
@@ -49,12 +51,6 @@ func randString(nByte int) (string, error) {
 	}
 
 	return base64.RawURLEncoding.EncodeToString(b), nil
-}
-
-func randBytes(nByte int) ([]byte, error) {
-	b := make([]byte, nByte)
-	_, err := io.ReadFull(rand.Reader, b)
-	return b, err
 }
 
 func getHost(req *http.Request) string {

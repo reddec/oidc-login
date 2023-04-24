@@ -3,9 +3,10 @@ package oidclogin
 import (
 	"context"
 	"fmt"
-	"github.com/alexedwards/scs/v2"
 	"net/http"
 	"time"
+
+	"github.com/alexedwards/scs/v2"
 )
 
 func (svc *OIDC) withSession(w http.ResponseWriter, r *http.Request, tx func(session context.Context) error) error {
@@ -35,6 +36,7 @@ func (svc *OIDC) getSession(r *http.Request) (context.Context, error) {
 func (svc *OIDC) commitSession(session context.Context, writer http.ResponseWriter) error {
 	writer.Header().Add("Vary", "Cookie")
 
+	//nolint:exhaustive
 	switch svc.config.SessionManager.Status(session) {
 	case scs.Modified:
 		token, expiry, err := svc.config.SessionManager.Commit(session)

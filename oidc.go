@@ -3,14 +3,16 @@ package oidclogin
 import (
 	"context"
 	"encoding/gob"
+	"errors"
 	"fmt"
-	"github.com/alexedwards/scs/v2"
-	"github.com/coreos/go-oidc/v3/oidc"
-	"golang.org/x/oauth2"
 	"io"
 	"log"
 	"net/http"
 	"strings"
+
+	"github.com/alexedwards/scs/v2"
+	"github.com/coreos/go-oidc/v3/oidc"
+	"golang.org/x/oauth2"
 )
 
 const (
@@ -24,6 +26,8 @@ const (
 	dataKey  = "data"
 	idKey    = "id"
 )
+
+var errNotApplicable = errors.New("method not applicable")
 
 // OAuthFlow represents set of allowed OAuth flows.
 type OAuthFlow uint8
@@ -93,6 +97,7 @@ func New(ctx context.Context, cfg Config) (*OIDC, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get OIDC provider: %w", err)
 	}
+	//nolint:tagliatelle
 	var claims struct {
 		EndSessionURL string `json:"end_session_endpoint"`
 	}
@@ -145,6 +150,8 @@ func (svc *OIDC) Config(req *http.Request) *oauth2.Config {
 }
 
 // SecureFunc is just an alias to [Secure].
+//
+//nolint:interfacer
 func (svc *OIDC) SecureFunc(next http.HandlerFunc) http.Handler {
 	return svc.Secure(next)
 }
@@ -162,25 +169,28 @@ func (svc *OIDC) Secure(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		// M2M flow
 		idToken, err := svc.clientCredentials(writer, request)
-		if err != nil {
-			svc.logError("failed validate access by client credentials flow:", err)
-			return
+		if !errors.Is(err, errNotApplicable) {
+			if err != nil {
+				svc.logError("failed validate access by client credentials flow:", err)
+				return
+			}
+			if idToken != nil {
+				next.ServeHTTP(writer, request.WithContext(withToken(request.Context(), idToken)))
+				return
+			}
 		}
-		if idToken != nil {
-			next.ServeHTTP(writer, request.WithContext(withToken(request.Context(), idToken)))
-			return
-		}
-
 		// UI flow
 		// note: UI flow should go always last, since it can initiate redirects.
 		idToken, err = svc.codeGrant(writer, request)
-		if err != nil {
-			svc.logError("failed validate access by code-grant flow:", err)
-			return
-		}
-		if idToken != nil {
-			next.ServeHTTP(writer, request.WithContext(withToken(request.Context(), idToken)))
-			return
+		if !errors.Is(err, errNotApplicable) {
+			if err != nil {
+				svc.logError("failed validate access by code-grant flow:", err)
+				return
+			}
+			if idToken != nil {
+				next.ServeHTTP(writer, request.WithContext(withToken(request.Context(), idToken)))
+				return
+			}
 		}
 
 		// oops - all methods failed
@@ -190,7 +200,7 @@ func (svc *OIDC) Secure(next http.Handler) http.Handler {
 
 func (svc *OIDC) codeGrant(writer http.ResponseWriter, request *http.Request) (*oidc.IDToken, error) {
 	if svc.config.Flows&AuthorizationCode == 0 {
-		return nil, nil
+		return nil, errNotApplicable
 	}
 
 	session, err := svc.getSession(request)
@@ -250,11 +260,11 @@ func (svc *OIDC) codeGrant(writer http.ResponseWriter, request *http.Request) (*
 
 func (svc *OIDC) clientCredentials(writer http.ResponseWriter, request *http.Request) (*oidc.IDToken, error) {
 	if svc.config.Flows&ClientCredentials == 0 {
-		return nil, nil
+		return nil, errNotApplicable
 	}
 	token, ok := getHeaderToken(request)
 	if !ok {
-		return nil, nil
+		return nil, errNotApplicable
 	}
 
 	idToken, err := svc.verifier.Verify(request.Context(), token)
@@ -269,7 +279,9 @@ func (svc *OIDC) clientCredentials(writer http.ResponseWriter, request *http.Req
 	return idToken, nil
 }
 
-// unauthorized request will automatically redirect to OIDC login
+// unauthorized request will automatically redirect to OIDC login.
+//
+//nolint:contextcheck
 func (svc *OIDC) unauthorizedRequest(writer http.ResponseWriter, request *http.Request) {
 	if err := svc.beforeAuth(writer, request); err != nil {
 		svc.logWarn("before auth failed:", err)
@@ -372,7 +384,6 @@ func (svc *OIDC) logout(writer http.ResponseWriter, request *http.Request) {
 		svc.logWarn("destroy session on logout:", err)
 	}
 	http.Redirect(writer, request, svc.getServerURL(request), http.StatusFound)
-	return
 }
 
 func (svc *OIDC) getServerURL(req *http.Request) string {
@@ -423,14 +434,6 @@ func (svc *OIDC) postAuth(writer http.ResponseWriter, request *http.Request, id 
 	return handler(writer, request, id)
 }
 
-func (svc *OIDC) isSecure(req *http.Request) bool {
-	if strings.HasPrefix("https", svc.config.ServerURL) {
-		return true
-	}
-
-	return getProto(req) == "https"
-}
-
 func (svc *OIDC) logInfo(messages ...any) {
 	svc.config.Logger.Log(LogInfo, fmt.Sprint(messages...))
 }
@@ -443,6 +446,7 @@ func (svc *OIDC) logError(messages ...any) {
 	svc.config.Logger.Log(LogError, fmt.Sprint(messages...))
 }
 
+//nolint:gochecknoinits
 func init() {
 	// shim for store
 	gob.Register(&oauth2.Token{})

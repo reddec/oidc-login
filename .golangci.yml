@@ -1,0 +1,15 @@
+run:
+  tests: false
+linters:
+  enable-all: true
+  disable:
+    - goerr113
+    - contextcheck
+    - exhaustivestruct
+    - wrapcheck
+    - varnamelen
+    - exhaustruct
+    - lll
+    - wsl
+    - nlreturn
+    - gofumpt
