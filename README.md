@@ -86,7 +86,7 @@ Here are some notes for administrators to keep in mind while using OIDC Login:
 ```go
 func SetOWASPHeaders(writer http.ResponseWriter) {
   writer.Header().Set("X-Frame-Options", "DENY") // helps with click hijacking
-  writer.Header().Set("X-XSS-Protection", "0")
+  writer.Header().Set("X-XSS-Protection", "1")
   writer.Header().Set("X-Content-Type-Options", "nosniff") // helps with content-type substitution
   writer.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin") // disables cross-origin requests 
 }
