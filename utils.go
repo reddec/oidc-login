@@ -44,6 +44,16 @@ func User(token *oidc.IDToken) string {
 	return token.Subject
 }
 
+// Email from claims. May return empty string.
+func Email(token *oidc.IDToken) string {
+	//nolint:tagliatelle
+	var claims struct {
+		Email string `json:"email"`
+	}
+	_ = token.Claims(&claims)
+	return claims.Email
+}
+
 func randString(nByte int) (string, error) {
 	b := make([]byte, nByte)
 	if _, err := io.ReadFull(rand.Reader, b); err != nil {
