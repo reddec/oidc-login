@@ -149,7 +149,7 @@ func (svc *OIDC) Config(req *http.Request) *oauth2.Config {
 	return svc.getConfig(req)
 }
 
-// SecureFunc is just an alias to [Secure].
+// SecureFunc is just an alias to [OIDC.Secure] for functional handlers.
 //
 //nolint:interfacer
 func (svc *OIDC) SecureFunc(next http.HandlerFunc) http.Handler {
