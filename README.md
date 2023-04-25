@@ -31,7 +31,7 @@ auditable, maintainable, and flexible as much as possible.
 
 ## Usage
 
-Checkout [Go docs](https://pkg.go.dev/github.com/reddec/go-login) and [examples](examples).
+Checkout [Go docs](https://pkg.go.dev/github.com/reddec/oidc-login) and [examples](examples).
 
 To use OIDC Login, simply follow the code below:
 
