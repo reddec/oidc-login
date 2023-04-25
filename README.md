@@ -10,7 +10,7 @@ OIDC is supported by most major platforms, including Okta, Google, Auth0, Keyclo
 OpenID Connect
 ([OIDC](https://auth0.com/docs/authenticate/protocols/openid-connect-protocol#:~:text=OpenID%20Connect%20(OIDC)%20is%20an,obtain%20basic%20user%20profile%20information))
 is a simple identity layer on top of the OAuth 2.0 protocol that allows clients to verify the
-identity of the end-user based on the authen**tication performed by an authorization server. OIDC provides a standard way
+identity of the end-user based on the authentication performed by an authorization server. OIDC provides a standard way
 for clients to authenticate users, and obtain basic user profile information.
 
 The library supports
