@@ -54,6 +54,16 @@ func Email(token *oidc.IDToken) string {
 	return claims.Email
 }
 
+// Groups from claims. May return nil slice.
+func Groups(token *oidc.IDToken) []string {
+	//nolint:tagliatelle
+	var claims struct {
+		Groups []string `json:"groups"`
+	}
+	_ = token.Claims(&claims)
+	return claims.Groups
+}
+
 func randString(nByte int) (string, error) {
 	b := make([]byte, nByte)
 	if _, err := io.ReadFull(rand.Reader, b); err != nil {
