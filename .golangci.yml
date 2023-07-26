@@ -13,3 +13,6 @@ linters:
     - wsl
     - nlreturn
     - gofumpt
+    - tagliatelle
+    - funlen
+    - cyclop

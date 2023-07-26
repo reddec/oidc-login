@@ -46,7 +46,6 @@ func User(token *oidc.IDToken) string {
 
 // Email from claims. May return empty string.
 func Email(token *oidc.IDToken) string {
-	//nolint:tagliatelle
 	var claims struct {
 		Email string `json:"email"`
 	}
@@ -56,7 +55,6 @@ func Email(token *oidc.IDToken) string {
 
 // Groups from claims. May return nil slice.
 func Groups(token *oidc.IDToken) []string {
-	//nolint:tagliatelle
 	var claims struct {
 		Groups []string `json:"groups"`
 	}

@@ -68,6 +68,11 @@ type Config struct {
 	// If handler returned any error, request will be rejected with 403 code.
 	// It's a good place to save current URL in order to redirect user after authorization to the initial page.
 	BeforeAuth func(writer http.ResponseWriter, req *http.Request) error
+	// (optional) handle situation after ID token refresh.
+	// Could be useful to reload profile or something related to user.
+	// The callback will not be called for M2M.
+	// If handler returned any error, user will be rejected with 403 code.
+	PostRefresh func(writer http.ResponseWriter, req *http.Request, idToken *oidc.IDToken) error
 	// (optional) tune allowed authorization types. Default - AllFlows
 	Flows OAuthFlow
 	// (optional) logger for messages, default is to std logger
@@ -234,6 +239,7 @@ func (svc *OIDC) codeGrant(writer http.ResponseWriter, request *http.Request) (*
 	}
 
 	// little hack since we know internal implementation of TokenSource
+	var refreshed bool
 	if newToken != currentOauthToken {
 		// token changed
 		rawIDToken, ok := newToken.Extra("id_token").(string)
@@ -243,6 +249,7 @@ func (svc *OIDC) codeGrant(writer http.ResponseWriter, request *http.Request) (*
 			return nil, fmt.Errorf("no ID token in OAuth token")
 		}
 		currentIDToken = rawIDToken
+		refreshed = true
 	}
 
 	// validate token and get ID token
@@ -250,6 +257,14 @@ func (svc *OIDC) codeGrant(writer http.ResponseWriter, request *http.Request) (*
 	if err != nil {
 		svc.unauthorizedRequest(writer, request)
 		return nil, fmt.Errorf("verify token: %w", err)
+	}
+
+	// call hook on post-refresh
+	if refreshed {
+		if err := svc.postRefresh(writer, request, idToken); err != nil {
+			svc.unauthorizedRequest(writer, request)
+			return nil, fmt.Errorf("post-refresh hook failed: %w", err)
+		}
 	}
 
 	// save new token
@@ -433,6 +448,14 @@ func (svc *OIDC) beforeAuth(writer http.ResponseWriter, request *http.Request) e
 
 func (svc *OIDC) postAuth(writer http.ResponseWriter, request *http.Request, id *oidc.IDToken) error {
 	handler := svc.config.PostAuth
+	if handler == nil {
+		return nil
+	}
+	return handler(writer, request, id)
+}
+
+func (svc *OIDC) postRefresh(writer http.ResponseWriter, request *http.Request, id *oidc.IDToken) error {
+	handler := svc.config.PostRefresh
 	if handler == nil {
 		return nil
 	}
