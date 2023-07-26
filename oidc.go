@@ -48,6 +48,8 @@ type Config struct {
 	ClientID string
 	// OIDC client secret (aka: confidential mode)
 	ClientSecret string
+	// (optional) list of OAuth scopes. Default is minimal required: openid - [oidc.ScopeOpenID]
+	Scopes []string
 	// (optional) public server URL,
 	// if not set system will try to detect it by request URL, X-Forwarded-Host, and X-Forwarded-Proto which is
 	// potentially is not secure and can be forged (unless there is secure forward proxy in front)
@@ -91,6 +93,9 @@ func New(ctx context.Context, cfg Config) (*OIDC, error) {
 			log.Println("["+level+"]", "oidc-logger:", message)
 		})
 	}
+	if len(cfg.Scopes) == 0 {
+		cfg.Scopes = []string{oidc.ScopeOpenID}
+	}
 	cfg.CallbackPrefix = strings.TrimRight(cfg.CallbackPrefix, "/")
 
 	provider, err := oidc.NewProvider(ctx, cfg.IssuerURL)
@@ -108,7 +113,7 @@ func New(ctx context.Context, cfg Config) (*OIDC, error) {
 			ClientID:     cfg.ClientID,
 			ClientSecret: cfg.ClientSecret,
 			Endpoint:     provider.Endpoint(),
-			Scopes:       []string{oidc.ScopeOpenID},
+			Scopes:       cfg.Scopes,
 		},
 		verifier: provider.Verifier(&oidc.Config{
 			ClientID: cfg.ClientID,
