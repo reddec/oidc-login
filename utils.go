@@ -28,6 +28,9 @@ func Token(req *http.Request) *oidc.IDToken {
 
 // User based on (in order of priority) claims: preferred_username, email, subject.
 func User(token *oidc.IDToken) string {
+	if token == nil {
+		return ""
+	}
 	//nolint:tagliatelle
 	var claims struct {
 		Username string `json:"preferred_username"`
@@ -46,6 +49,9 @@ func User(token *oidc.IDToken) string {
 
 // Email from claims. May return empty string.
 func Email(token *oidc.IDToken) string {
+	if token == nil {
+		return ""
+	}
 	var claims struct {
 		Email string `json:"email"`
 	}
@@ -55,6 +61,9 @@ func Email(token *oidc.IDToken) string {
 
 // Groups from claims. May return nil slice.
 func Groups(token *oidc.IDToken) []string {
+	if token == nil {
+		return nil
+	}
 	var claims struct {
 		Groups []string `json:"groups"`
 	}
