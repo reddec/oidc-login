@@ -4,8 +4,9 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	oidclogin "github.com/reddec/oidc-login"
 	"net/http"
+
+	oidclogin "github.com/reddec/oidc-login"
 )
 
 func main() {

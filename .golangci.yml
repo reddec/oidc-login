@@ -1,18 +1,20 @@
 run:
   tests: false
 linters:
+  exclusions:
+    paths:
+      - "examples/"
   enable-all: true
   disable:
-    - goerr113
-    - contextcheck
-    - exhaustivestruct
     - wrapcheck
     - varnamelen
     - exhaustruct
     - lll
     - wsl
     - nlreturn
-    - gofumpt
     - tagliatelle
     - funlen
     - cyclop
+    - tenv
+    - depguard
+    - gci
