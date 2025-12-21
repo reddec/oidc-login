@@ -82,7 +82,7 @@ func (tss *CookieStore[T]) Save(writer http.ResponseWriter, req *http.Request, s
 		Path:     "/",
 		Secure:   utils.HTTPInfo(req, tss.trustProxy).Proto() == "https",
 		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
+		SameSite: http.SameSiteLaxMode,
 		Expires:  time.Now().Add(tss.sessionTTL),
 	})
 	return nil

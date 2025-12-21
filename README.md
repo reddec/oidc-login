@@ -79,6 +79,11 @@ func main() {
 - Private client (PKCE not supported), both client_id and client_secret must be set
 - Redirect URI must be `https://<public-server-url>/<oauth prefix>/callback` (default `https://<public-server-url>/oauth2/callback`)
 
+
+## Endpoints
+
+Useful for full routing.
+
 ## Notes to Admins
 
 Here are some notes for administrators to keep in mind while using OIDC Login:

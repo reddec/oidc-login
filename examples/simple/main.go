@@ -31,18 +31,13 @@ func main() {
 		panic(err) // handle it properly in production
 	}
 
-	// add secured route (or group)
-	http.Handle("/", auth.SecureFunc(func(writer http.ResponseWriter, request *http.Request) {
-		token := oidclogin.Token(request)
-		name := oidclogin.User(token)
+	http.HandleFunc("/profile", func(writer http.ResponseWriter, request *http.Request) {
+		user := oidclogin.User(request)
 		writer.Header().Set("Content-Type", "text/html")
-		_, _ = writer.Write([]byte("<html><body><h1>Hello, " + name + "</h1></body></html>"))
-	}))
-
-	// add callback prefixes
-	http.Handle(oidclogin.Prefix, auth)
+		_, _ = writer.Write([]byte("<html><body><h1>Hello, " + user + "!</h1></body></html>"))
+	})
 
 	// start
 	fmt.Println("ready")
-	_ = http.ListenAndServe(binding, nil)
+	_ = http.ListenAndServe(binding, auth.Secure(http.DefaultServeMux))
 }
