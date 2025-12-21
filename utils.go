@@ -80,23 +80,6 @@ func randString(nByte int) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
-func getHost(req *http.Request) string {
-	if v := req.Header.Get("X-Forwarded-Host"); v != "" {
-		return v
-	}
-	return req.Host
-}
-
-func getProto(req *http.Request) string {
-	if v := req.Header.Get("X-Forwarded-Proto"); v != "" {
-		return v
-	}
-	if req.TLS != nil {
-		return "https"
-	}
-	return "http"
-}
-
 func getHeaderToken(req *http.Request) (string, bool) {
 	if kind, value, ok := strings.Cut(req.Header.Get("Authorization"), " "); ok && strings.EqualFold("bearer", kind) && value != "" {
 		return value, true

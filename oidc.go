@@ -16,6 +16,7 @@ import (
 	"golang.org/x/oauth2"
 
 	"github.com/reddec/oidc-login/internal/sessions"
+	"github.com/reddec/oidc-login/internal/utils"
 	"github.com/reddec/oidc-login/stores"
 )
 
@@ -71,7 +72,7 @@ type Config struct {
 	CookieName string
 	// (optional) session TTL. Default is [SessionTTL].
 	SessionTTL time.Duration
-	// (optional) enable X-Forwarded-Proto support.
+	// (optional) enable X-Forwarded-* support.
 	TrustProxy bool
 	// (optional) enable session store encryption at-rest. Useless for in-memory store.
 	Encrypted bool
@@ -458,10 +459,7 @@ func (svc *OIDC) logout(writer http.ResponseWriter, request *http.Request) {
 }
 
 func (svc *OIDC) getServerURL(req *http.Request) string {
-	if u := svc.config.ServerURL; u != "" {
-		return u
-	}
-	return getProto(req) + "://" + getHost(req)
+	return cmp.Or(svc.config.ServerURL, utils.HTTPInfo(req, svc.config.TrustProxy).ServerURL())
 }
 
 func (svc *OIDC) getConfig(req *http.Request) *oauth2.Config {

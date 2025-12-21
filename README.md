@@ -19,6 +19,8 @@ both [Client Credentials](https://auth0.com/docs/get-started/authentication-and-
 and [Authorization Code](https://auth0.com/docs/get-started/authentication-and-authorization-flow/authorization-code-flow)
 flow (UI).
 
+Optionally, it supports encryption at rest for the session storage.
+
 ## Motivation
 
 While there are several alternatives available, such
