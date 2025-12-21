@@ -1,6 +1,7 @@
 package oidclogin
 
 import (
+	"cmp"
 	"context"
 	"encoding/gob"
 	"errors"
@@ -9,10 +10,14 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
-	"github.com/alexedwards/scs/v2"
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
+
+	"github.com/reddec/oidc-login/internal/sessions"
+	"github.com/reddec/oidc-login/internal/utils"
+	"github.com/reddec/oidc-login/stores"
 )
 
 const (
@@ -20,11 +25,12 @@ const (
 	nonceSize = 16
 )
 
-const (
-	stateKey = "state"
-	nonceKey = "nonce"
-	dataKey  = "data"
-	idKey    = "id"
+var (
+	ErrSessionTokenNotFound = errors.New("session token not found")
+	ErrIDTokenNotFound      = errors.New("ID token not found")
+	ErrOAuthHasNoIDToken    = errors.New("no ID token in OAuth token")
+	ErrOAuthStateMismatch   = errors.New("state mismatch")
+	ErrOAuthNonceMismatch   = errors.New("nonce mismatch")
 )
 
 var errNotApplicable = errors.New("method not applicable")
@@ -38,7 +44,11 @@ const (
 	AllFlows          OAuthFlow = AuthorizationCode | ClientCredentials
 )
 
-const Prefix string = "/oauth2/" // default prefix for callback and logout. Can be changed by [Config.CallbackPrefix].
+const (
+	Prefix     string = "/oauth2/"         // default prefix for callback and logout. Can be changed by [Config.CallbackPrefix].
+	CookieName        = "_session"         // default cookie name.
+	SessionTTL        = 7 * 24 * time.Hour // default session TTL.
+)
 
 type Config struct {
 	// OIDC URL (ex: https://example.com/realm/my-realm).
@@ -48,16 +58,24 @@ type Config struct {
 	ClientID string
 	// OIDC client secret (aka: confidential mode)
 	ClientSecret string
-	// (optional) list of OAuth scopes. Default is minimal required: openid - [oidc.ScopeOpenID]
+	// (optional) list of OAuth scopes. Default is minimal required: openid - [DefaultScopes]
 	Scopes []string
 	// (optional) public server URL,
 	// if not set system will try to detect it by request URL, X-Forwarded-Host, and X-Forwarded-Proto which is
 	// potentially is not secure and can be forged (unless there is secure forward proxy in front)
 	ServerURL string
 	// (optional) prefix for path for callbacks URL. Default prefix is [Prefix]
-	CallbackPrefix string
-	// (optional) session manager. If not set, default in-memory session manager will be used.
-	SessionManager *scs.SessionManager
+	Prefix string
+	// (optional) session manager. If not set, default in-memory session store will be used.
+	SessionStore sessions.Store
+	// (optional) cookie name for session. Default is [CookieName]
+	CookieName string
+	// (optional) session TTL. Default is [SessionTTL].
+	SessionTTL time.Duration
+	// (optional) enable X-Forwarded-* support.
+	TrustProxy bool
+	// (optional) enable session store encryption at-rest. Useless for in-memory store.
+	Encrypted bool
 	// (optional) handle user post-authorization.
 	// If handler returned any error, user will be rejected with 403 code, otherwise it will return 303	StatusSeeOther.
 	// Callback may set destination URL via Location header; if header is not set, root server URL will be used.
@@ -84,14 +102,23 @@ type Config struct {
 //
 // Service does provide automatic ID token refresh for UI flow.
 func New(ctx context.Context, cfg Config) (*OIDC, error) {
-	if cfg.CallbackPrefix == "" {
-		cfg.CallbackPrefix = Prefix
+	if cfg.Prefix == "" {
+		cfg.Prefix = Prefix
 	}
 	if cfg.Flows == 0 {
 		cfg.Flows = AllFlows
 	}
-	if cfg.SessionManager == nil {
-		cfg.SessionManager = scs.New()
+	if cfg.CookieName == "" {
+		cfg.CookieName = CookieName
+	}
+	if cfg.SessionTTL <= 0 {
+		cfg.SessionTTL = SessionTTL
+	}
+	if cfg.SessionStore == nil {
+		cfg.SessionStore = stores.NewInMemory()
+	}
+	if cfg.Encrypted {
+		cfg.SessionStore = sessions.NewEncryptedStore(cfg.SessionStore)
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = LoggerFunc(func(level Level, message string) {
@@ -99,9 +126,9 @@ func New(ctx context.Context, cfg Config) (*OIDC, error) {
 		})
 	}
 	if len(cfg.Scopes) == 0 {
-		cfg.Scopes = []string{oidc.ScopeOpenID}
+		cfg.Scopes = DefaultScopes()
 	}
-	cfg.CallbackPrefix = strings.TrimRight(cfg.CallbackPrefix, "/")
+	cfg.Prefix = strings.TrimRight(cfg.Prefix, "/")
 
 	provider, err := oidc.NewProvider(ctx, cfg.IssuerURL)
 	if err != nil {
@@ -123,17 +150,23 @@ func New(ctx context.Context, cfg Config) (*OIDC, error) {
 		verifier: provider.Verifier(&oidc.Config{
 			ClientID: cfg.ClientID,
 		}),
+		sessions: sessions.New[storeItem](sessions.Config{
+			Store:      cfg.SessionStore,
+			CookieName: cfg.CookieName,
+			SessionTTL: cfg.SessionTTL,
+			TrustProxy: cfg.TrustProxy,
+		}),
 		logoutURL: claims.EndSessionURL,
 		config:    cfg,
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc(svc.config.CallbackPrefix+"/callback", func(writer http.ResponseWriter, request *http.Request) {
+	mux.HandleFunc(svc.config.Prefix+"/callback", func(writer http.ResponseWriter, request *http.Request) {
 		if err := svc.handlerCallback(writer, request); err != nil {
 			svc.logError("handle callback:", err)
 			writer.WriteHeader(http.StatusForbidden)
 		}
 	})
-	mux.HandleFunc(svc.config.CallbackPrefix+"/logout", svc.logout)
+	mux.HandleFunc(svc.config.Prefix+"/logout", svc.logout)
 	svc.mux = mux
 
 	return svc, nil
@@ -142,6 +175,7 @@ func New(ctx context.Context, cfg Config) (*OIDC, error) {
 type OIDC struct {
 	oauthConfig oauth2.Config
 	verifier    *oidc.IDTokenVerifier
+	sessions    *sessions.CookieStore[storeItem]
 	logoutURL   string
 	config      Config
 	mux         *http.ServeMux
@@ -177,6 +211,11 @@ func (svc *OIDC) SecureFunc(next http.HandlerFunc) http.Handler {
 // Current ID token get be obtained by [Token] from request.
 func (svc *OIDC) Secure(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		// callback or whatever else "ours" - serve here
+		if strings.HasPrefix(request.URL.Path, svc.config.Prefix+"/") {
+			svc.mux.ServeHTTP(writer, request)
+			return
+		}
 		// M2M flow
 		idToken, err := svc.clientCredentials(writer, request)
 		if !errors.Is(err, errNotApplicable) {
@@ -213,69 +252,92 @@ func (svc *OIDC) codeGrant(writer http.ResponseWriter, request *http.Request) (*
 		return nil, errNotApplicable
 	}
 
-	session, err := svc.getSession(request)
+	session, err := svc.sessions.Get(request)
 	if err != nil {
 		svc.unauthorizedRequest(writer, request)
 		return nil, fmt.Errorf("get session: %w", err)
 	}
 
-	currentOauthToken, ok := svc.config.SessionManager.Get(session, dataKey).(*oauth2.Token)
-	if !ok {
+	if session.State.OAuthToken == nil {
 		svc.unauthorizedRequest(writer, request)
-		return nil, fmt.Errorf("session token not found")
+		return nil, ErrSessionTokenNotFound
 	}
 
-	currentIDToken, ok := svc.config.SessionManager.Get(session, idKey).(string)
-	if !ok {
+	if session.State.IDToken == nil {
 		svc.unauthorizedRequest(writer, request)
-		return nil, fmt.Errorf("ID token not found")
+		return nil, ErrIDTokenNotFound
 	}
 
-	// try to refresh token (if needed)
-	newToken, err := svc.getConfig(request).TokenSource(request.Context(), currentOauthToken).Token()
-	if err != nil {
+	// validate token (refresh if needed)
+	if err := svc.validateSession(writer, request, session); err != nil {
 		svc.unauthorizedRequest(writer, request)
 		return nil, fmt.Errorf("refresh token: %w", err)
 	}
 
-	// little hack since we know internal implementation of TokenSource
-	var refreshed bool
-	if newToken != currentOauthToken {
-		// token changed
-		rawIDToken, ok := newToken.Extra("id_token").(string)
-		if !ok {
-			// not normal situation
-			svc.unauthorizedRequest(writer, request)
-			return nil, fmt.Errorf("no ID token in OAuth token")
-		}
-		currentIDToken = rawIDToken
-		refreshed = true
-	}
+	return session.State.IDToken, nil
+}
 
-	// validate token and get ID token
-	idToken, err := svc.verifier.Verify(request.Context(), currentIDToken)
+func (svc *OIDC) validateSession(writer http.ResponseWriter, request *http.Request, session *sessions.Session[storeItem]) error {
+	// try to refresh token (if needed)
+	rawIDToken, err := svc.getIDToken(writer, request, session)
 	if err != nil {
 		svc.unauthorizedRequest(writer, request)
-		return nil, fmt.Errorf("verify token: %w", err)
+		return fmt.Errorf("get ID token: %w", err)
 	}
 
+	// validate token
+	idToken, err := svc.verifier.Verify(request.Context(), rawIDToken)
+	if err != nil {
+		svc.unauthorizedRequest(writer, request)
+		return fmt.Errorf("verify token: %w", err)
+	}
+	session.State.IDToken = idToken
+	return nil
+}
+
+func (svc *OIDC) getIDToken(writer http.ResponseWriter, request *http.Request, session *sessions.Session[storeItem]) (string, error) {
+	// try to refresh token (if needed)
+	newToken, err := svc.getConfig(request).TokenSource(request.Context(), session.State.OAuthToken).Token()
+	if err != nil {
+		return "", fmt.Errorf("refresh token: %w", err)
+	}
+
+	// if newToken is the same as saved one, we can return from session.
+	// the main problem is that OIDC package retain only minimal required set of fields (ans looses all claims).
+	// to prevent - we need to save ID token in parallel with everything else (and pray to gods to not loose it in store).
+	if newToken == session.State.OAuthToken {
+		return session.State.RawIDToken, nil
+	}
+
+	svc.logInfo("token refreshed")
+
+	// token changed
+	rawIDToken, ok := newToken.Extra("id_token").(string)
+	if !ok {
+		// not normal situation - we lost ID token in refresh response
+		return "", ErrOAuthHasNoIDToken
+	}
+
+	// a bit hacky way to get ID Token (for refresh requires twice verification)
+	idToken, err := svc.verifier.Verify(request.Context(), rawIDToken)
+	if err != nil {
+		return "", fmt.Errorf("verify token: %w", err)
+	}
+	session.State.IDToken = idToken
+	session.State.RawIDToken = rawIDToken
+
 	// call hook on post-refresh
-	if refreshed {
-		if err := svc.postRefresh(writer, request, idToken); err != nil {
-			svc.unauthorizedRequest(writer, request)
-			return nil, fmt.Errorf("post-refresh hook failed: %w", err)
-		}
+	if err := svc.postRefresh(writer, request, session.State.IDToken); err != nil {
+		return "", fmt.Errorf("post-refresh hook failed: %w", err)
 	}
 
 	// save new token
-	svc.config.SessionManager.Put(session, dataKey, newToken)
-	svc.config.SessionManager.Put(session, idKey, currentIDToken)
-
-	if err := svc.commitSession(session, writer); err != nil {
+	if err := svc.sessions.Save(writer, request, session); err != nil {
 		// ignore session error - request authorized, so we may want to process it instead of dropping.
 		svc.logWarn("failed commit session after validation:", err)
 	}
-	return idToken, nil
+
+	return rawIDToken, nil
 }
 
 func (svc *OIDC) clientCredentials(writer http.ResponseWriter, request *http.Request) (*oidc.IDToken, error) {
@@ -300,8 +362,6 @@ func (svc *OIDC) clientCredentials(writer http.ResponseWriter, request *http.Req
 }
 
 // unauthorized request will automatically redirect to OIDC login.
-//
-//nolint:contextcheck
 func (svc *OIDC) unauthorizedRequest(writer http.ResponseWriter, request *http.Request) {
 	if err := svc.beforeAuth(writer, request); err != nil {
 		svc.logWarn("before auth failed:", err)
@@ -322,13 +382,23 @@ func (svc *OIDC) unauthorizedRequest(writer http.ResponseWriter, request *http.R
 		return
 	}
 
-	err = svc.withSession(writer, request, func(session context.Context) error {
-		svc.config.SessionManager.Put(session, stateKey, state)
-		svc.config.SessionManager.Put(session, nonceKey, nonce)
-		return nil
-	})
+	sitePath := request.URL.Path
+	if request.URL.RawQuery != "" {
+		sitePath += "?" + request.URL.RawQuery
+	}
 
+	session, err := svc.sessions.New()
 	if err != nil {
+		svc.logError("create session:", err)
+		http.Error(writer, "Internal error", http.StatusInternalServerError)
+		return
+	}
+
+	session.State.State = state
+	session.State.Nonce = nonce
+	session.State.RedirectTo = sitePath
+
+	if err := svc.sessions.Save(writer, request, session); err != nil {
 		svc.logError("save session:", err)
 		http.Error(writer, "Save session", http.StatusInternalServerError)
 		return
@@ -338,14 +408,13 @@ func (svc *OIDC) unauthorizedRequest(writer http.ResponseWriter, request *http.R
 }
 
 func (svc *OIDC) handlerCallback(writer http.ResponseWriter, request *http.Request) error {
-	session, err := svc.getSession(request)
+	session, err := svc.sessions.Get(request)
 	if err != nil {
 		return fmt.Errorf("get session: %w", err)
 	}
-	state := svc.config.SessionManager.GetString(session, stateKey)
 
-	if request.URL.Query().Get("state") != state {
-		return fmt.Errorf("state did not match")
+	if request.URL.Query().Get("state") != session.State.State {
+		return ErrOAuthStateMismatch
 	}
 
 	oauth2Token, err := svc.getConfig(request).Exchange(request.Context(), request.URL.Query().Get("code"))
@@ -355,7 +424,7 @@ func (svc *OIDC) handlerCallback(writer http.ResponseWriter, request *http.Reque
 
 	rawIDToken, ok := oauth2Token.Extra("id_token").(string)
 	if !ok {
-		return fmt.Errorf("no id_token field in oauth2 token")
+		return ErrOAuthHasNoIDToken
 	}
 
 	idToken, err := svc.verifier.Verify(request.Context(), rawIDToken)
@@ -363,10 +432,8 @@ func (svc *OIDC) handlerCallback(writer http.ResponseWriter, request *http.Reque
 		return fmt.Errorf("verify ID token: %w", err)
 	}
 
-	nonce := svc.config.SessionManager.GetString(session, nonceKey)
-
-	if idToken.Nonce != nonce {
-		return fmt.Errorf("nonce did not match")
+	if idToken.Nonce != session.State.Nonce {
+		return ErrOAuthNonceMismatch
 	}
 
 	if err := svc.postAuth(writer, request, idToken); err != nil {
@@ -375,19 +442,22 @@ func (svc *OIDC) handlerCallback(writer http.ResponseWriter, request *http.Reque
 
 	if v := writer.Header().Get("Location"); v == "" {
 		// redirect to root url if postAuth didn't set location
-		writer.Header().Set("Location", svc.getServerURL(request))
+		writer.Header().Set("Location", cmp.Or(session.State.RedirectTo, svc.getServerURL(request)))
 	}
 
 	// cleanup session to reduce size
-	svc.config.SessionManager.Remove(session, nonceKey)
-	svc.config.SessionManager.Remove(session, stateKey)
+	session.State.State = ""
+	session.State.Nonce = ""
+	session.State.RedirectTo = ""
 
 	// store tokens to re-use them later
-	svc.config.SessionManager.Put(session, dataKey, oauth2Token)
-	svc.config.SessionManager.Put(session, idKey, rawIDToken)
+	session.State.OAuthToken = oauth2Token
+	session.State.IDToken = idToken
+	session.State.RawIDToken = rawIDToken
 
-	if err := svc.commitSession(session, writer); err != nil {
+	if err := svc.sessions.Save(writer, request, session); err != nil {
 		svc.logWarn("failed commit session on callback:", err)
+		return fmt.Errorf("save session: %w", err) // we cannot continue
 	}
 
 	writer.WriteHeader(http.StatusSeeOther)
@@ -395,27 +465,30 @@ func (svc *OIDC) handlerCallback(writer http.ResponseWriter, request *http.Reque
 }
 
 func (svc *OIDC) logout(writer http.ResponseWriter, request *http.Request) {
-	err := svc.withSession(writer, request, func(session context.Context) error {
-		hint := svc.config.SessionManager.GetString(session, idKey)
-		svc.requestEndSession(request.Context(), hint) // ask OIDC server to terminate session
-		return svc.config.SessionManager.Destroy(session)
-	})
+	session, err := svc.sessions.Get(request)
 	if err != nil {
+		svc.logWarn("get session on logout:", err)
+		http.Redirect(writer, request, svc.getServerURL(request), http.StatusFound)
+		return
+	}
+
+	if err := svc.sessions.Delete(request.Context(), writer, session); err != nil {
 		svc.logWarn("destroy session on logout:", err)
+	}
+
+	if session.State.RawIDToken != "" {
+		svc.requestEndSession(request.Context(), session.State.RawIDToken) // ask OIDC server to terminate session
 	}
 	http.Redirect(writer, request, svc.getServerURL(request), http.StatusFound)
 }
 
 func (svc *OIDC) getServerURL(req *http.Request) string {
-	if u := svc.config.ServerURL; u != "" {
-		return u
-	}
-	return getProto(req) + "://" + getHost(req)
+	return cmp.Or(svc.config.ServerURL, utils.HTTPInfo(req, svc.config.TrustProxy).ServerURL())
 }
 
 func (svc *OIDC) getConfig(req *http.Request) *oauth2.Config {
 	cp := svc.oauthConfig
-	cp.RedirectURL = svc.getServerURL(req) + svc.config.CallbackPrefix + "/callback"
+	cp.RedirectURL = svc.getServerURL(req) + svc.config.Prefix + "/callback"
 	return &cp
 }
 
@@ -472,6 +545,21 @@ func (svc *OIDC) logWarn(messages ...any) {
 
 func (svc *OIDC) logError(messages ...any) {
 	svc.config.Logger.Log(LogError, fmt.Sprint(messages...))
+}
+
+// DefaultScopes returns default scopes for OIDC (openid, profile, email).
+func DefaultScopes() []string {
+	return []string{"openid", "profile", "email"}
+}
+
+type storeItem struct {
+	RawIDToken string
+	RedirectTo string
+	State      string
+	Nonce      string
+
+	OAuthToken *oauth2.Token
+	IDToken    *oidc.IDToken
 }
 
 //nolint:gochecknoinits

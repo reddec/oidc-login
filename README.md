@@ -19,6 +19,8 @@ both [Client Credentials](https://auth0.com/docs/get-started/authentication-and-
 and [Authorization Code](https://auth0.com/docs/get-started/authentication-and-authorization-flow/authorization-code-flow)
 flow (UI).
 
+Optionally, it supports encryption at rest for the session storage.
+
 ## Motivation
 
 While there are several alternatives available, such
@@ -71,6 +73,16 @@ func main() {
 
 
 ```
+
+## IDP configuration
+
+- Private client (PKCE not supported), both client_id and client_secret must be set
+- Redirect URI must be `https://<public-server-url>/<oauth prefix>/callback` (default `https://<public-server-url>/oauth2/callback`)
+
+
+## Endpoints
+
+Useful for full routing.
 
 ## Notes to Admins
 

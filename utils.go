@@ -27,8 +27,9 @@ func Token(req *http.Request) *oidc.IDToken {
 }
 
 // User based on (in order of priority) claims: preferred_username, email, subject.
-func User(token *oidc.IDToken) string {
-	if token == nil {
+func User(req *http.Request) string {
+	token, ok := req.Context().Value(tokenKey{}).(*oidc.IDToken)
+	if !ok {
 		return ""
 	}
 	//nolint:tagliatelle
@@ -48,8 +49,9 @@ func User(token *oidc.IDToken) string {
 }
 
 // Email from claims. May return empty string.
-func Email(token *oidc.IDToken) string {
-	if token == nil {
+func Email(req *http.Request) string {
+	token, ok := req.Context().Value(tokenKey{}).(*oidc.IDToken)
+	if !ok {
 		return ""
 	}
 	var claims struct {
@@ -60,8 +62,9 @@ func Email(token *oidc.IDToken) string {
 }
 
 // Groups from claims. May return nil slice.
-func Groups(token *oidc.IDToken) []string {
-	if token == nil {
+func Groups(req *http.Request) []string {
+	token, ok := req.Context().Value(tokenKey{}).(*oidc.IDToken)
+	if !ok {
 		return nil
 	}
 	var claims struct {
@@ -78,23 +81,6 @@ func randString(nByte int) (string, error) {
 	}
 
 	return base64.RawURLEncoding.EncodeToString(b), nil
-}
-
-func getHost(req *http.Request) string {
-	if v := req.Header.Get("X-Forwarded-Host"); v != "" {
-		return v
-	}
-	return req.Host
-}
-
-func getProto(req *http.Request) string {
-	if v := req.Header.Get("X-Forwarded-Proto"); v != "" {
-		return v
-	}
-	if req.TLS != nil {
-		return "https"
-	}
-	return "http"
 }
 
 func getHeaderToken(req *http.Request) (string, bool) {
