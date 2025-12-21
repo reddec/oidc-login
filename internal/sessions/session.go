@@ -29,12 +29,19 @@ type Store interface {
 	Delete(ctx context.Context, key string) error
 }
 
-func New[T any](store Store, cookieName string, sessionTTL time.Duration, trustProxy bool) *CookieStore[T] {
+type Config struct {
+	Store      Store
+	CookieName string
+	SessionTTL time.Duration
+	TrustProxy bool
+}
+
+func New[T any](cfg Config) *CookieStore[T] {
 	return &CookieStore[T]{
-		store:      store,
-		cookieName: cookieName,
-		sessionTTL: sessionTTL,
-		trustProxy: trustProxy,
+		store:      cfg.Store,
+		cookieName: cfg.CookieName,
+		sessionTTL: cfg.SessionTTL,
+		trustProxy: cfg.TrustProxy,
 	}
 }
 
@@ -105,7 +112,7 @@ func (tss *CookieStore[T]) DeleteUnparsed(writer http.ResponseWriter, req *http.
 // New session with random ID and pre-created state.
 // Doesn't save it to storage.
 func (tss *CookieStore[T]) New() (*Session[T], error) {
-	const idSize = 64
+	const idSize = 32
 	var buf [idSize]byte
 	_, err := rand.Read(buf[:])
 	if err != nil {

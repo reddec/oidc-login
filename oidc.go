@@ -73,6 +73,8 @@ type Config struct {
 	SessionTTL time.Duration
 	// (optional) enable X-Forwarded-Proto support.
 	TrustProxy bool
+	// (optional) enable session store encryption at-rest. Useless for in-memory store.
+	Encrypted bool
 	// (optional) handle user post-authorization.
 	// If handler returned any error, user will be rejected with 403 code, otherwise it will return 303	StatusSeeOther.
 	// Callback may set destination URL via Location header; if header is not set, root server URL will be used.
@@ -114,6 +116,9 @@ func New(ctx context.Context, cfg Config) (*OIDC, error) {
 	if cfg.SessionStore == nil {
 		cfg.SessionStore = stores.NewInMemory()
 	}
+	if cfg.Encrypted {
+		cfg.SessionStore = sessions.NewEncryptedStore(cfg.SessionStore)
+	}
 	if cfg.Logger == nil {
 		cfg.Logger = LoggerFunc(func(level Level, message string) {
 			log.Println("["+level+"]", "oidc-logger:", message)
@@ -144,7 +149,12 @@ func New(ctx context.Context, cfg Config) (*OIDC, error) {
 		verifier: provider.Verifier(&oidc.Config{
 			ClientID: cfg.ClientID,
 		}),
-		sessions:  sessions.New[storeItem](cfg.SessionStore, cfg.CookieName, cfg.SessionTTL, cfg.TrustProxy),
+		sessions: sessions.New[storeItem](sessions.Config{
+			Store:      cfg.SessionStore,
+			CookieName: cfg.CookieName,
+			SessionTTL: cfg.SessionTTL,
+			TrustProxy: cfg.TrustProxy,
+		}),
 		logoutURL: claims.EndSessionURL,
 		config:    cfg,
 	}
