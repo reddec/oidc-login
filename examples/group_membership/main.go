@@ -31,6 +31,22 @@ func main() {
 		panic(err) // handle it properly in production
 	}
 
+	// admin-only routes
+	admin := http.NewServeMux()
+	admin.HandleFunc("/admin/settings", func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/html")
+		_, _ = writer.Write([]byte("<html><body><h1>Admin settings</h1></body></html>"))
+	})
+
+	// editor and admin routes
+	editor := http.NewServeMux()
+	editor.HandleFunc("/editor/dashboard", func(writer http.ResponseWriter, request *http.Request) {
+		name := oidclogin.User(request)
+		writer.Header().Set("Content-Type", "text/html")
+		_, _ = writer.Write([]byte("<html><body><h1>Editor dashboard for " + name + "</h1></body></html>"))
+	})
+
+	// open to all authenticated users
 	private := http.NewServeMux()
 	private.HandleFunc("/private/hello", func(writer http.ResponseWriter, request *http.Request) {
 		name := oidclogin.User(request)
@@ -38,11 +54,9 @@ func main() {
 		_, _ = writer.Write([]byte("<html><body><h1>Hello, " + name + "</h1></body></html>"))
 	})
 
-	private.HandleFunc("/private/another", func(writer http.ResponseWriter, request *http.Request) {
-		_, _ = writer.Write([]byte("<html><body><h1>Another private page</h1></body></html>"))
-	})
-
-	// add secured group
+	// restrict each group to allowed roles
+	http.Handle("/admin/", auth.Secure(admin, "admin"))
+	http.Handle("/editor/", auth.Secure(editor, "editor", "admin"))
 	http.Handle("/private/", auth.Secure(private))
 
 	// add callback prefixes

@@ -194,10 +194,8 @@ func (svc *OIDC) Config(req *http.Request) *oauth2.Config {
 }
 
 // SecureFunc is just an alias to [OIDC.Secure] for functional handlers.
-//
-//nolint:interfacer
-func (svc *OIDC) SecureFunc(next http.HandlerFunc) http.Handler {
-	return svc.Secure(next)
+func (svc *OIDC) SecureFunc(next http.HandlerFunc, allowedGroups ...string) http.Handler {
+	return svc.Secure(next, allowedGroups...)
 }
 
 // Secure handler by checking authorization state.
@@ -208,8 +206,26 @@ func (svc *OIDC) SecureFunc(next http.HandlerFunc) http.Handler {
 // If [AuthorizationCode] enabled in [Config.Flows], service will try [AuthorizationCode] flow. In this case, invalid request
 // will cause login sequence and redirect to IDP.
 //
+// Optional allowedGroups restricts access to users belonging to at least one of the specified groups.
+// If no groups are specified, all authenticated users are allowed.
+// Groups are extracted from the "groups" claim in the ID token.
+//
 // Current ID token get be obtained by [Token] from request.
-func (svc *OIDC) Secure(next http.Handler) http.Handler {
+func (svc *OIDC) Secure(next http.Handler, allowedGroups ...string) http.Handler {
+	handler := svc.secureHandler(next)
+	if len(allowedGroups) == 0 {
+		return handler
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if Belongs(r, allowedGroups...) {
+			handler.ServeHTTP(w, r)
+			return
+		}
+		http.Error(w, "Forbidden", http.StatusForbidden)
+	})
+}
+
+func (svc *OIDC) secureHandler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		// callback or whatever else "ours" - serve here
 		if strings.HasPrefix(request.URL.Path, svc.config.Prefix+"/") {
@@ -507,7 +523,7 @@ func (svc *OIDC) requestEndSession(ctx context.Context, rawToken string) {
 		svc.logWarn("execute logout sub-request to IDP:", err)
 		return
 	}
-	defer res.Body.Close()
+	defer res.Body.Close() //nolint:errcheck
 	_, _ = io.Copy(io.Discard, res.Body)
 }
 

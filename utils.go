@@ -74,6 +74,23 @@ func Groups(req *http.Request) []string {
 	return claims.Groups
 }
 
+// Belongs checks if the current user belongs to at least one of the given groups.
+// Returns true if groups is empty or if the user's groups intersect with the provided groups.
+func Belongs(req *http.Request, groups ...string) bool {
+	if len(groups) == 0 {
+		return true
+	}
+	userGroups := Groups(req)
+	for _, userGroup := range userGroups {
+		for _, allowed := range groups {
+			if userGroup == allowed {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func randString(nByte int) (string, error) {
 	b := make([]byte, nByte)
 	if _, err := io.ReadFull(rand.Reader, b); err != nil {
