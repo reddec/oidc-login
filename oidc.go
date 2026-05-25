@@ -93,6 +93,10 @@ type Config struct {
 	PostRefresh func(writer http.ResponseWriter, req *http.Request, idToken *oidc.IDToken) error
 	// (optional) tune allowed authorization types. Default - AllFlows
 	Flows OAuthFlow
+	// (optional) duration before token expiry to proactively refresh.
+	// For example, 5*time.Minute refreshes tokens 5 minutes before they expire.
+	// Default is 0 (only refresh when expired).
+	RefreshBefore time.Duration
 	// (optional) logger for messages, default is to std logger
 	Logger Logger
 }
@@ -313,7 +317,11 @@ func (svc *OIDC) validateSession(writer http.ResponseWriter, request *http.Reque
 
 func (svc *OIDC) getIDToken(writer http.ResponseWriter, request *http.Request, session *sessions.Session[storeItem]) (string, error) {
 	// try to refresh token (if needed)
-	newToken, err := svc.getConfig(request).TokenSource(request.Context(), session.State.OAuthToken).Token()
+	tokenSrc := svc.getConfig(request).TokenSource(request.Context(), session.State.OAuthToken)
+	if svc.config.RefreshBefore > 0 {
+		tokenSrc = oauth2.ReuseTokenSourceWithExpiry(session.State.OAuthToken, tokenSrc, svc.config.RefreshBefore)
+	}
+	newToken, err := tokenSrc.Token()
 	if err != nil {
 		return "", fmt.Errorf("refresh token: %w", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
+	"time"
 
 	oidclogin "github.com/reddec/oidc-login"
 )
@@ -16,6 +17,8 @@ func main() {
 	flag.StringVar(&issuer, "issuer", "", "OIDC issuer URL")
 	var binding string
 	flag.StringVar(&binding, "bind", "127.0.0.1:8080", "HTTP server binding")
+	var refreshBefore time.Duration
+	flag.DurationVar(&refreshBefore, "refresh-before", 5*time.Minute, "proactively refresh tokens this long before expiry")
 	flag.Parse()
 
 	if clientID == "" || clientSecret == "" || issuer == "" {
@@ -23,9 +26,10 @@ func main() {
 	}
 
 	auth, err := oidclogin.New(context.Background(), oidclogin.Config{
-		IssuerURL:    issuer,
-		ClientID:     clientID,
-		ClientSecret: clientSecret,
+		IssuerURL:     issuer,
+		ClientID:      clientID,
+		ClientSecret:  clientSecret,
+		RefreshBefore: refreshBefore,
 	})
 	if err != nil {
 		panic(err) // handle it properly in production
