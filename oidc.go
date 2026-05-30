@@ -216,16 +216,22 @@ func (svc *OIDC) SecureFunc(next http.HandlerFunc, allowedGroups ...string) http
 //
 // Current ID token get be obtained by [Token] from request.
 func (svc *OIDC) Secure(next http.Handler, allowedGroups ...string) http.Handler {
-	handler := svc.secureHandler(next)
-	if len(allowedGroups) == 0 {
-		return handler
+	if len(allowedGroups) > 0 {
+		next = svc.restrictGroups(next, allowedGroups)
 	}
+	return svc.secureHandler(next)
+}
+
+// restrictGroups wraps a handler with a group membership check.
+// The ID token must already be present in the request context
+// (i.e. this must be called after authentication has succeeded inside secureHandler).
+func (svc *OIDC) restrictGroups(next http.Handler, allowedGroups []string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if Belongs(r, allowedGroups...) {
-			handler.ServeHTTP(w, r)
+		if !Belongs(r, allowedGroups...) {
+			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}
-		http.Error(w, "Forbidden", http.StatusForbidden)
+		next.ServeHTTP(w, r)
 	})
 }
 
