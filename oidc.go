@@ -97,6 +97,9 @@ type Config struct {
 	// For example, 5*time.Minute refreshes tokens 5 minutes before they expire.
 	// Default is 0 (only refresh when expired).
 	RefreshBefore time.Duration
+	// (optional) handler for 403 Forbidden responses when the user is authenticated
+	// but not in any of the allowed groups. If nil, a plain "Forbidden" text response is used.
+	ForbiddenHandler func(w http.ResponseWriter, r *http.Request)
 	// (optional) logger for messages, default is to std logger
 	Logger Logger
 }
@@ -228,7 +231,11 @@ func (svc *OIDC) Secure(next http.Handler, allowedGroups ...string) http.Handler
 func (svc *OIDC) restrictGroups(next http.Handler, allowedGroups []string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !Belongs(r, allowedGroups...) {
-			http.Error(w, "Forbidden", http.StatusForbidden)
+			if svc.config.ForbiddenHandler != nil {
+				svc.config.ForbiddenHandler(w, r)
+			} else {
+				http.Error(w, "Forbidden", http.StatusForbidden)
+			}
 			return
 		}
 		next.ServeHTTP(w, r)
