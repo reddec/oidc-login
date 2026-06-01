@@ -97,6 +97,9 @@ type Config struct {
 	// For example, 5*time.Minute refreshes tokens 5 minutes before they expire.
 	// Default is 0 (only refresh when expired).
 	RefreshBefore time.Duration
+	// (optional) handler for 403 Forbidden responses when the user is authenticated
+	// but not in any of the allowed groups. If nil, a plain "Forbidden" text response is used.
+	ForbiddenHandler func(w http.ResponseWriter, r *http.Request)
 	// (optional) logger for messages, default is to std logger
 	Logger Logger
 }
@@ -216,16 +219,26 @@ func (svc *OIDC) SecureFunc(next http.HandlerFunc, allowedGroups ...string) http
 //
 // Current ID token get be obtained by [Token] from request.
 func (svc *OIDC) Secure(next http.Handler, allowedGroups ...string) http.Handler {
-	handler := svc.secureHandler(next)
-	if len(allowedGroups) == 0 {
-		return handler
+	if len(allowedGroups) > 0 {
+		next = svc.restrictGroups(next, allowedGroups)
 	}
+	return svc.secureHandler(next)
+}
+
+// restrictGroups wraps a handler with a group membership check.
+// The ID token must already be present in the request context
+// (i.e. this must be called after authentication has succeeded inside secureHandler).
+func (svc *OIDC) restrictGroups(next http.Handler, allowedGroups []string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if Belongs(r, allowedGroups...) {
-			handler.ServeHTTP(w, r)
+		if !Belongs(r, allowedGroups...) {
+			if svc.config.ForbiddenHandler != nil {
+				svc.config.ForbiddenHandler(w, r)
+			} else {
+				http.Error(w, "Forbidden", http.StatusForbidden)
+			}
 			return
 		}
-		http.Error(w, "Forbidden", http.StatusForbidden)
+		next.ServeHTTP(w, r)
 	})
 }
 
