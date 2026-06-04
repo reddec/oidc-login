@@ -230,16 +230,21 @@ func (svc *OIDC) Secure(next http.Handler, allowedGroups ...string) http.Handler
 // (i.e. this must be called after authentication has succeeded inside secureHandler).
 func (svc *OIDC) restrictGroups(next http.Handler, allowedGroups []string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !Belongs(r, allowedGroups...) {
-			if svc.config.ForbiddenHandler != nil {
-				svc.config.ForbiddenHandler(w, r)
-			} else {
-				http.Error(w, "Forbidden", http.StatusForbidden)
-			}
+		if Belongs(r, allowedGroups...) {
+			next.ServeHTTP(w, r)
 			return
 		}
-		next.ServeHTTP(w, r)
+		svc.forbiddenHandler(w, r)
 	})
+}
+
+func (svc *OIDC) forbiddenHandler(writer http.ResponseWriter, request *http.Request) {
+	handler := svc.config.ForbiddenHandler
+	if handler == nil {
+		http.Error(writer, "Forbidden", http.StatusForbidden)
+		return
+	}
+	handler(writer, request)
 }
 
 func (svc *OIDC) secureHandler(next http.Handler) http.Handler {
