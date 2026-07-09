@@ -31,6 +31,7 @@ var (
 	ErrOAuthHasNoIDToken    = errors.New("no ID token in OAuth token")
 	ErrOAuthStateMismatch   = errors.New("state mismatch")
 	ErrOAuthNonceMismatch   = errors.New("nonce mismatch")
+	ErrNotAuthenticated     = errors.New("not authenticated")
 )
 
 var errNotApplicable = errors.New("method not applicable")
@@ -223,6 +224,73 @@ func (svc *OIDC) Secure(next http.Handler, allowedGroups ...string) http.Handler
 		next = svc.restrictGroups(next, allowedGroups)
 	}
 	return svc.secureHandler(next)
+}
+
+// Verify the request using all enabled authentication flows
+// without writing HTTP responses or initiating redirects.
+//
+// Unlike [OIDC.Secure], Verify does not call [Config.PostAuth],
+// [Config.PostRefresh], or [Config.BeforeAuth] callbacks, and does not
+// refresh expired tokens. It performs cryptographic token verification only.
+//
+// On success, the returned [oidc.IDToken] can be used to inspect claims.
+// To make the token available to [Token], [User], [Email], [Groups], and
+// [Belongs] helpers, attach it to the request context with the context
+// package.
+//
+// Returns [ErrNotAuthenticated] when no valid authentication is present.
+func (svc *OIDC) Verify(req *http.Request) (*oidc.IDToken, error) {
+	idToken, err := svc.verifyClientCredentials(req)
+	if !errors.Is(err, errNotApplicable) {
+		return idToken, err
+	}
+	idToken, err = svc.verifyCodeGrant(req)
+	if !errors.Is(err, errNotApplicable) {
+		return idToken, err
+	}
+	return nil, ErrNotAuthenticated
+}
+
+// verifyClientCredentials verifies a client credentials (M2M) Bearer token
+// without writing HTTP responses or invoking postAuth.
+func (svc *OIDC) verifyClientCredentials(req *http.Request) (*oidc.IDToken, error) {
+	if svc.config.Flows&ClientCredentials == 0 {
+		return nil, errNotApplicable
+	}
+	token, ok := getHeaderToken(req)
+	if !ok {
+		return nil, errNotApplicable
+	}
+	idToken, err := svc.verifier.Verify(req.Context(), token)
+	if err != nil {
+		return nil, fmt.Errorf("verify token: %w", err)
+	}
+	return idToken, nil
+}
+
+// verifyCodeGrant verifies a UI (authorization code) session without
+// writing HTTP responses, initiating redirects, or invoking callbacks.
+// Token refresh is intentionally skipped: Verify is a read-only check.
+func (svc *OIDC) verifyCodeGrant(req *http.Request) (*oidc.IDToken, error) {
+	if svc.config.Flows&AuthorizationCode == 0 {
+		return nil, errNotApplicable
+	}
+	session, err := svc.sessions.Get(req)
+	if err != nil {
+		return nil, errNotApplicable
+	}
+	if session.State.OAuthToken == nil || session.State.IDToken == nil {
+		return nil, errNotApplicable
+	}
+	// Verify the stored ID token without refreshing.
+	// Token refresh requires a ResponseWriter (for cookie updates and
+	// callbacks), which Verify intentionally does not provide.
+	idToken, err := svc.verifier.Verify(req.Context(), session.State.RawIDToken)
+	if err != nil {
+		return nil, fmt.Errorf("verify token: %w", err)
+	}
+	session.State.IDToken = idToken
+	return idToken, nil
 }
 
 // restrictGroups wraps a handler with a group membership check.
