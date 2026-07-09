@@ -1,7 +1,7 @@
 # OIDC login
 
 [![license](https://img.shields.io/github/license/reddec/oidc-login.svg)](https://github.com/reddec/oidc-login)
-[![](https://godoc.org/github.com/reddec/oidc-login?status.svg)](http://godoc.org/github.com/reddec/oidc-login)
+[![Go Reference](https://pkg.go.dev/badge/github.com/reddec/oidc-login.svg)](https://pkg.go.dev/github.com/reddec/oidc-login)
 
 Welcome to OIDC Login, a simple and secure way to authorize your application with the OpenID Connect (OIDC) protocol.
 OIDC is supported by most major platforms, including Okta, Google, Auth0, Keycloak, Authentik, and others.
@@ -54,11 +54,32 @@ private.HandleFunc("/hello", func(w http.ResponseWriter, r *http.Request) {
     fmt.Fprintf(w, "<html><body><h1>Hello, %s!</h1></body></html>", name)
 })
 
-// all authenticated users can access private routes
+// Secure the entire mux at the root. The OIDC callback (<prefix>/callback) and
+// logout (<prefix>/logout) endpoints are served automatically — one mount is all
+// you need.
 http.Handle("/", auth.Secure(private))
+```
 
-// mount OIDC callback and logout endpoints
-http.Handle(oidclogin.Prefix, auth)
+> [!NOTE]
+> **Register this redirect URI at your IdP:** `https://<public-server-url>/oauth2/callback`
+> (or `<prefix>/callback` if you set a custom `Config.Prefix`). The public server URL comes from
+> `Config.ServerURL`, or is auto-detected from the request if unset — see [IDP configuration](#idp-configuration).
+
+That's the whole setup. With `Secure` mounted at `/`, every route is protected and the
+callback/logout endpoints are handled internally (no separate wiring). You only need to
+mount `auth` at `oidclogin.Prefix` when you wrap `Secure` around sub-routers instead of
+the root — see [Multiple access levels](#multiple-access-levels).
+
+By default, ID tokens that have expired are refreshed automatically on the next request. To refresh proactively
+before expiry (avoiding latency on the first request after expiry), set `RefreshBefore`:
+
+```go
+auth, err := oidclogin.New(context.Background(), oidclogin.Config{
+    IssuerURL:     "https://some-idp.example.com",
+    ClientID:      "<MY CLIENT ID>",
+    ClientSecret:  "<MY SECRET>",
+    RefreshBefore: 5 * time.Minute, // refresh tokens 5 minutes before they expire
+})
 ```
 
 ### Group-based access control
@@ -112,11 +133,42 @@ private := http.NewServeMux()
 private.HandleFunc("/hello", helloHandler)
 http.Handle("/", auth.Secure(private))
 
-// mount OIDC endpoints
+// since Secure wraps sub-routers (not the root), expose callback/logout at the prefix
 http.Handle(oidclogin.Prefix, auth)
 ```
 
 See the full example at [examples/group_membership/main.go](examples/group_membership/main.go).
+
+### API-only verification (no redirects)
+
+For JSON APIs or hybrid endpoints where you want structured error responses instead of the default `Secure` behavior
+(login redirects or `401`/`403`), use `Verify`. It verifies the request using any enabled flow but performs only
+cryptographic token verification — no HTTP responses, no redirects, no `PostAuth`/`PostRefresh`/`BeforeAuth` callbacks,
+and no automatic refresh — so you keep full control of the response. It returns `ErrNotAuthenticated` when no valid
+authentication is present.
+
+```go
+auth, err := oidclogin.New(context.Background(), oidclogin.Config{
+    IssuerURL:    issuer,
+    ClientID:     clientID,
+    ClientSecret: clientSecret,
+    Flows:        oidclogin.ClientCredentials, // M2M / bearer-token API
+})
+if err != nil {
+    panic(err)
+}
+
+http.HandleFunc("/api/whoami", func(w http.ResponseWriter, r *http.Request) {
+    idToken, err := auth.Verify(r)
+    if err != nil {
+        w.WriteHeader(http.StatusUnauthorized)
+        return
+    }
+    fmt.Fprintln(w, "subject:", idToken.Subject)
+})
+```
+
+See the full example at [examples/verify/main.go](examples/verify/main.go).
 
 ## IDP configuration
 
@@ -130,14 +182,29 @@ Here are some notes for administrators to keep in mind while using OIDC Login:
 * Set the public server URL in case you cannot control `X-Forwarded-Host` and `X-Forwarded-Proto` headers by reverse
   proxy.
 * Set persistent storage for sessions.
-* It is highly recommended to secure your application by OWASP recommended headers. Here is some code you can use to set
-  these headers:
+* Protect your application against Cross-Site Request Forgery (CSRF). Since Go 1.25 (this module targets Go 1.25+),
+  the standard library provides
+  [`http.CrossOriginProtection`](https://pkg.go.dev/net/http#example-CrossOriginProtection), which rejects non-safe
+  cross-origin browser requests (GET, HEAD, and OPTIONS are always allowed as safe methods):
+
+```go
+mux := http.NewServeMux()
+mux.Handle("/", auth.Secure(private))
+
+// zero value is valid; register extra origins if your app is embedded on other sites
+cop := http.NewCrossOriginProtection()
+// _ = cop.AddTrustedOrigin("https://trusted.example.com")
+
+http.ListenAndServe(":8080", cop.Handler(mux))
+```
+
+* It is also recommended to harden responses with OWASP headers:
 
 ```go
 func SetOWASPHeaders(writer http.ResponseWriter) {
-  writer.Header().Set("X-Frame-Options", "DENY") // helps with click hijacking
-  writer.Header().Set("X-XSS-Protection", "1")
+  writer.Header().Set("X-Frame-Options", "DENY") // helps with clickjacking
+  writer.Header().Set("X-XSS-Protection", "0") // disable the deprecated, harmful XSS auditor
   writer.Header().Set("X-Content-Type-Options", "nosniff") // helps with content-type substitution
-  writer.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin") // disables cross-origin requests 
+  writer.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin") // limits referrer leakage
 }
 ```
